@@ -1,0 +1,21 @@
+apply plugin: 'java'
+
+repositories {
+    mavenLocal()
+    mavenCentral()
+}
+
+sourceCompatibility = '11'
+targetCompatibility = '11'
+
+dependencies {
+    compile group: 'org.pzdcdoc', name: 'pzdcdoc', version: '1.9'
+}
+
+defaultTasks 'clean', 'buildDoc'
+
+task buildDoc(type:JavaExec) {
+    classpath = sourceSets.main.runtimeClasspath
+    main = 'org.pzdcdoc.DocGenerator'
+    args 'NOTUSED', 'src', 'target/doc'
+}
