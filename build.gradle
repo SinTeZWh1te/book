@@ -19,3 +19,16 @@ task buildDoc(type:JavaExec) {
     main = 'org.pzdcdoc.DocGenerator'
     args 'NOTUSED', 'src', 'target/doc'
 }
+
+// bash -c "./gradlew publishDoc -Ppublish.login=user@host -Ppublish.folder=/home/path"
+task publishDoc(dependsOn: 'buildDoc') {
+    doFirst {
+        def sshLogin = findProperty("publish.login");
+        def sshFolder = findProperty("publish.folder")
+
+        def command = "rsync --delete -Pav target/doc/ $sshLogin:$sshFolder"
+
+        println "Running: $command"
+        println command.execute().text
+    }
+}
