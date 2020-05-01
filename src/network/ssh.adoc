@@ -1,0 +1,31 @@
+= SSH
+:toc:
+
+[[port-mapping]]
+== Перенаправление порта
+Пример.
+[source]
+----
+ssh user@host -L3307:127.0.0.1:3306
+----
+
+[[certbot]]
+== CertBot управление сертификатами
+=== NGINX 
+Получение сертификатов.
+[source]
+----
+certbot --nginx -d bgerp.ru -d www.bgerp.ru -d bgerp.de -d www.bgerp.de -d bgerp.org -d www.bgerp.org
+----
+
+Далее создать файл `/root/crontab` с содержимым:
+[source]
+----
+15 3 * * * /usr/bin/certbot renew --quiet --nginx-ctl /usr/sbin/nginx --nginx-server-root /etc/nginx
+----
+
+Для периодического запуска выполнить:
+[source]
+----
+crontab crontab
+----
