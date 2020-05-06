@@ -1,0 +1,4 @@
+= Плагин Documents
+:toc:
+
+TIP: https://docs.bitel.ru/pages/viewpage.action?pageId=43386544[Документация] по плагину Documents
