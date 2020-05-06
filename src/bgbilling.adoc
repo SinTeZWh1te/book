@@ -1,7 +1,7 @@
 = BGBilling
 :nofooter:
 
-* <<about.adoc#, About>>
+* <<bgbilling/about.adoc#, About>>
 * <<bgbilling/management.adoc#, Администрирование>>
 * <<bgbilling/wildfly.adoc#, WildFly. Личный кабинет>>
 * <<bgbilling/mysql.adoc#, MySQL>>
