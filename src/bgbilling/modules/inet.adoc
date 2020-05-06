@@ -1,0 +1,4 @@
+= Модуль Inet
+:toc:
+
+TIP: https://docs.bitel.ru/pages/viewpage.action?pageId=43385854[Документация] по модулю Inet
