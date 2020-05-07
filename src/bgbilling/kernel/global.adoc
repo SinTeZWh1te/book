@@ -1,0 +1,1101 @@
+= Глобальные скрипты поведения
+:toc:
+
+== Конвертирование адреса
+
+По какой либо причине бывает адрес импортируется в формате текста, скрипт для конвертирования адреса из формата текст в формат адрес Разработка Bitel - dimOn
+
+[source,java]
+----
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import ru.bitel.bgbilling.common.BGException;
+import ru.bitel.bgbilling.kernel.container.managed.ServerContext;
+import ru.bitel.bgbilling.kernel.module.common.bean.User;
+import ru.bitel.bgbilling.server.util.Setup;
+import ru.bitel.common.Utils;
+import ru.bitel.common.sql.ConnectionSet;
+import ru.bitel.oss.kernel.directories.address.common.bean.House;
+import ru.bitel.oss.kernel.directories.address.common.bean.Street;
+import ru.bitel.oss.kernel.directories.address.common.service.AddressService;
+import bitel.billing.server.admin.bean.AddressStruct;
+import bitel.billing.server.admin.bean.AddressUtils;
+import bitel.billing.server.contract.bean.ContractAddressParamValue;
+import bitel.billing.server.contract.bean.ContractParameterManager;
+
+
+public class AddressConverter
+{
+	int pidText = 35;//35
+	int pidAddress = 26;//26
+	int cityId = 1;
+
+	AddressService  addressService;
+	ContractParameterManager  parameterManager;
+	Connection con;
+
+	boolean test = false;
+
+	public void execute( Setup setup, ConnectionSet connectionSet )
+	{
+		try
+		{
+			con = connectionSet.getConnection();
+			this.run();
+		}
+		catch( Exception e )
+		{
+			e.printStackTrace();
+		}
+	}
+
+	private void run() throws SQLException, BGException
+	{
+		PreparedStatement ps = con.prepareStatement( "DROP TABLE IF EXISTS `_incorrectContractsAddressConvertor`" );
+		ps.execute();
+		ps.close();
+		ps = con.prepareStatement( "DROP TABLE IF EXISTS `_correctContractsAddressConvertorTEST`" );
+		ps.execute();
+		ps.close();
+		ps = con.prepareStatement( "CREATE TABLE IF NOT EXISTS `_incorrectContractsAddressConvertor` (  `cid` INT NOT NULL ,  `sourceParameter` VARCHAR(256) NULL ,  PRIMARY KEY (`cid`) )" );
+		ps.execute();
+		ps.close();
+
+		parameterManager = new ContractParameterManager( con );
+		addressService = ServerContext.get( ServerContext.class ).getService( AddressService.class, 0 );
+
+		if( test )
+		{
+			ps = con.prepareStatement( "CREATE TABLE IF NOT EXISTS `_correctContractsAddressConvertorTEST` ( `cid` INT NOT NULL , `street` VARCHAR(128) NULL , `number` INT NULL , `korpus` VARCHAR(45) NULL , `kv` VARCHAR(45) NULL , `room` VARCHAR(45) NULL , `sourse` VARCHAR(256) NULL , PRIMARY KEY (`cid`) )" );
+
+    		ps.execute();
+    		ps.close();
+			ps = con.prepareStatement( "SELECT * FROM _contractaddressparamtest;" );
+		}
+		else
+		{
+			ps = con.prepareStatement( "SELECT * FROM contract_parameter_type_1 WHERE pid=?" ); // добавить это " and cid=50110" к запросу если надо протестить на конкретном договоре. сид с лева от номера договора
+			ps.setInt( 1, pidText );
+		}
+
+		ResultSet rs = ps.executeQuery();
+		while( rs.next() )
+		{
+			try
+            {
+				int cid = rs.getInt( "cid" );
+				String val = rs.getString( "val" );
+				if( !needToParse( cid,  val ) )
+					continue;
+	            Entry entry = parse( val, cid );
+	            if( entry.isError )
+	            {
+	            	if( test )
+	            	{
+	            		PreparedStatement statement = con.prepareStatement( "INSERT INTO _correctContractsAddressConvertorTEST VALUES(?,?,?,?,?,?,?) " );
+		            	statement.setInt( 1, cid );
+		            	statement.setString( 2, entry.street );
+		            	statement.setInt( 3, entry.numberHome );
+		            	statement.setString( 4, entry.korpus );
+		            	statement.setString( 5, entry.apartment );
+		            	statement.setString( 6, entry.room );
+		            	statement.setString( 7, val );
+		            	statement.executeUpdate();
+		            	statement.close();
+	            	}
+	            	else
+	            	{
+	            		ContractAddressParamValue param = new ContractAddressParamValue();
+		            	Street street = getStreet( entry );
+		            	int houseId = getHousId( entry, street );
+
+		            	String addressFull = AddressUtils.getAddress(	Setup.getSetup(), getSruct( entry, houseId ), "default");
+		            	param.setAddress( addressFull );
+		            	param.setContractId( cid );
+		            	param.setHouseId( houseId );
+		            	param.setComment( "Конвертировано из текстового параметра" );
+		            	param.setFlat( entry.apartment );
+		            	param.setRoom( entry.room );
+		            	param.setFormatKey( "" );
+		            	parameterManager.updateAddressParam( cid, pidAddress, param, User.USER_SERVER );
+	            	}
+	            }
+	            else//заносим ошибочную запись в нашу таблицу.
+	            {
+	            	PreparedStatement statement = con.prepareStatement( "INSERT INTO _incorrectContractsAddressConvertor VALUES(?,?) " );
+	            	statement.setInt( 1, cid );
+	            	statement.setString( 2, val );
+	            	statement.executeUpdate();
+	            	statement.close();
+	            }
+            }
+            catch( Exception e )
+            {
+            	e.printStackTrace();
+            }
+		}
+		rs.close();
+		ps.close();
+	}
+
+	/** Если нужно добавлять данную запись, вернет true.
+	 */
+	private boolean needToParse( int cid, String val )
+	{
+		if( val.startsWith( "п. Сокол" ) )
+			return false;
+		ContractAddressParamValue paramValue = parameterManager.getAddressParam( cid, pidAddress );
+		if( paramValue == null)
+			return true;
+		else
+			return false;
+	}
+
+	private AddressStruct getSruct( Entry entry, int houseId ) throws BGException
+	{
+		AddressStruct struct = new AddressStruct();
+		struct.setCity( addressService.cityGet( cityId ).getTitle() );
+		struct.setStreet( entry.street );
+		String korp = Utils.parseInt( entry.korpus, -1 ) > 0 && entry.korpus != null ? "/" + entry.korpus : entry.korpus;
+		if( korp == null )
+			korp = "";
+		struct.setFrac( korp );
+		struct.setHouse( Integer.toString( entry.numberHome) );
+		struct.setHouseId( houseId );
+		struct.setFlat( entry.apartment );
+		struct.setRoom( entry.room );
+		return struct;
+	}
+
+private Entry parse( String str, int cid )
+	{
+		Entry entry = new Entry();
+
+		String[] mas = getRealMas( str.replaceAll( "  ", " " ).split( " " ) );
+		int index = 0;
+		if( mas.length == 4 )//улица дом корпус квартира
+		{
+			entry.street = mas[index++].trim();
+			entry.numberHome = Utils.parseInt( mas[index++].trim() );
+			entry.korpus = mas[index++].trim();
+			entry.apartment = mas[index++].trim();
+
+			// раскидываем номер квартиры и номер комнаты
+			entry = splitAppartmentAndRoom( entry, mas[mas.length - 1] );
+
+			if( entry.numberHome == 0 || !chekKv( entry.apartment ) )
+			{
+				entry.isError = false;
+			}
+		}
+		else if( mas.length == 3 )//улица дом квартира
+		{
+			entry.street = mas[index++].trim();
+			entry.numberHome = Utils.parseInt( mas[index++].trim() );
+			entry.apartment = mas[index++].trim();
+
+			// раскидываем номер квартиры и номер комнаты
+			entry = splitAppartmentAndRoom( entry, mas[mas.length - 1] );
+
+			// Если квартира буква, то видимо это корпус, а квартиры нет. Их считаем неверными.
+			Pattern pattern = Pattern.compile( "[А-Яа-яA-Za-z]?" );
+			Matcher matcher = pattern.matcher( entry.apartment );
+			if( matcher.lookingAt() )
+			{
+				entry.isError = false;
+				entry.korpus = entry.apartment;
+				entry.apartment = null;
+			}
+
+			if( entry.numberHome == 0 || !chekKv( entry.apartment ) )
+				entry.isError = false;
+		}
+		else if( mas.length == 2 )//Номер квартиры пустой.
+		{
+			entry.street = mas[index++].trim();
+			entry.numberHome = Utils.parseInt( mas[index++].trim() );
+			if( entry.numberHome == 0 )
+				entry.isError = false;
+		}
+		else
+			entry.isError = false;
+		return entry;
+	}
+
+	private Entry splitAppartmentAndRoom( Entry entry, String value )
+	{
+		String splitSymbol = null;
+		if( value.indexOf( "/" ) > -1 )
+			splitSymbol = "/";
+		else if( value.indexOf( "-" ) > -1 )
+			splitSymbol = "-";
+
+		if( splitSymbol != null )
+		{
+			String[] lMas = value.split( splitSymbol );
+			if( lMas.length == 2 )
+			{
+				entry.apartment = lMas[0];
+				entry.room = lMas[1];
+			}
+		}
+		return entry;
+	}
+
+	/** Возвратит Street, если она существует, иначе создаст ее и вернет.
+	 */
+	private Street getStreet( Entry entry ) throws BGException
+	{
+		List<Street> streetList = addressService.streetList( cityId, entry.street );
+		if( streetList.size() > 0 )
+		{
+			return streetList.get( 0 );
+		}
+		else
+		{
+			Street street = new Street();
+			street.setCityId( cityId );
+			street.setCityTitle( addressService.cityGet( cityId ).getTitle() );
+			street.setTitle( entry.street );
+			street.setId( addressService.streetUpdate( street ) );
+			return street;
+		}
+	}
+
+	/**
+	 *  Возвращает ид дома, если он существует( проверка по названию города, дома и корпуса/дроби )
+	 *  Если дома нет, то дом будет добавлен, и возвратит его ид.
+	 * @throws BGException
+	 */
+	private int getHousId( Entry entry, Street street ) throws BGException
+	{
+		try
+		{
+			String korp = Utils.parseInt( entry.korpus, -1 ) > 0 && entry.korpus != null ? "/" + entry.korpus : entry.korpus;
+			int houseId = get( street.getId(), entry.numberHome, entry.korpus == null ? "" : "/" + entry.korpus  );
+
+			if( houseId > 0 )
+				return houseId;
+			else
+			{
+				House house = new House();
+				house.setCityId( cityId );
+				house.setCityTitle( addressService.cityGet( cityId ).getTitle() );
+				if( entry.korpus != null )
+					house.setFrac( korp );
+				house.setStreetId( street.getId() );
+				house.setStreetTitle( street.getTitle() );
+				house.setHouse( entry.numberHome );
+				house.setComment( "Создан при конвертировании" );
+
+				return addressService.houseUpdate( house );
+			}
+		}
+		catch( BGException e )
+		{
+			e.printStackTrace();
+			throw new BGException();
+		}
+		catch( SQLException e )
+		{
+			e.printStackTrace();
+			throw new BGException();
+		}
+	}
+
+	private String[] getRealMas( String[] mas )
+	{
+		StringBuilder street = new StringBuilder();
+		ArrayList<String> list = new ArrayList<String>();
+		boolean flag = true;
+		for( String str : mas )
+		{
+			if( flag )
+			{
+				if( Utils.parseInt( str, -5 ) > 0 )
+				{
+					list.add( street.toString() );
+					list.add( str );
+					flag = false;
+				}
+				else
+					street.append( str + " " );
+			}
+			else
+				list.add( str );
+		}
+
+		return list.toArray( new String[1] );
+	}
+
+	private boolean chekKv( String kv )
+	{
+		if( kv == null )
+			return true;
+		Pattern pattern = Pattern.compile( "\\d+[А-Яа-яA-Za-z]?" );
+		Matcher matcher = pattern.matcher( kv );
+		if( matcher.matches() )
+			return true;
+		return false;
+	}
+
+	/**
+	* Получение ид дома из таблицы домов по параметрам его.
+	* @param streetid
+	* @param house
+	* @param frac
+	* @return ид дома из таблицы address_house, или 0 если дом не найден
+	* @throws SQLException
+	*/
+	private int get( int streetid, int house, String frac )
+	    throws SQLException
+	{
+		int index = 1;
+		int houseId = 0;
+		StringBuffer query = new StringBuffer();
+		query.append( "SELECT id FROM address_house WHERE streetid=? AND house=?" );
+		//когда-то могли лобавлять просто дробь в отдельном редакторе,
+		//а сейчас нельзя, но проверка все равно долдна быть на дробь
+		//до сих пор не понимаю чем это удобнее (king).@костыль
+		if( frac.startsWith( "/" ) )
+		{
+			query.append( " AND ( frac=? OR frac=? )" );
+		}
+		else
+		{
+			query.append( " AND frac=? " );
+		}
+		PreparedStatement ps = con.prepareStatement( query.toString() );
+		ps.setInt( index++, streetid );
+		ps.setInt( index++, house );
+		ps.setString( index++, frac );
+		if( frac.startsWith( "/" ) )
+		{
+			ps.setString( index++, frac.substring( 1 ) );
+		}
+		ResultSet rs = ps.executeQuery();
+		if( rs.next() )
+		{
+			houseId = rs.getInt( 1 );
+		}
+		rs.close();
+		ps.close();
+		return houseId;
+	}
+
+	private class Entry
+	{
+		String street = null;
+		int numberHome = 0;
+		String korpus = null;
+		String apartment = null;
+		String room =  new String();
+
+		boolean isError = true;
+	}
+
+}
+----
+
+== Глобальная синхронизация услуг модуля NPay с тарифным планом
+
+WARNING: Данное решение/метод/статья относится к версии 6.0 и для других версий может быть неактуальна!
+Вам нужно самостоятельно поправить решение под свои нужды или воспользоваться помощью на форуме.
+Будем признательны, если внизу страницы или отдельной статьёй вы разместите исправленное решение для другой версии или подсказки что надо исправить.
+
+WARNING: Перед выполнением сделайте дамп БД!
+
+[source,java]
+----
+package ru.sofit;
+
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.util.Calendar;
+import java.util.Collections;
+import java.util.Date;
+import java.util.GregorianCalendar;
+import java.util.Vector;
+
+import ru.bitel.bgbilling.server.util.Setup;
+import ru.bitel.common.sql.ConnectionSet;
+import bitel.billing.common.TimeUtils;
+import bitel.billing.server.contract.bean.ContractParameterManager;
+import bitel.billing.server.contract.bean.ContractTariff;
+import bitel.billing.server.contract.bean.ContractTariffManager;
+
+/**
+ * Скрипт с договора (готовый) переделан в глобальный скрипт.
+ * Синхронизирует услуги с тарифами.
+ * @author dimon
+ */
+public class SidsSynchroGlobal
+{
+	public void execute( Setup setup, ConnectionSet connectionSet )
+		throws Exception
+	{
+		System.out.println("Start");
+		Connection con  = connectionSet.getConnection();
+		//
+		long timeStart = System.currentTimeMillis();
+		Calendar now = Calendar.getInstance();
+		//
+		PreparedStatement ps  = con.prepareStatement( "SELECT * FROM contract ORDER BY id" );
+		ResultSet rs = ps.executeQuery();
+		int count = 0;
+		int count_all = 0;
+		while ( rs.next() )
+		{
+			++count_all;
+			int cid = rs.getInt("id");
+			String title = rs.getString("title");
+			String comment = rs.getString("comment");
+			System.out.println(String.format("#%s: %s (%s)", cid, title, comment));
+			//
+			//--------------------------------------------------------------------
+			// кусок кода из старого скрипта (немного подправлен 1) с BGBS 2) чтобы брал cid не из эвента 3) отключен рекалькулятор)
+			//--------------------------------------------------------------------
+			//print( event ) ;
+			int NPAY_MID = 4 ;
+			SidsSynchroManager sidman = new SidsSynchroManager() ;
+			//int cid = event.getContractId() ;
+			//sidman.setDebugMode(0) ;
+			sidman.setDeleteNonNeeded(1) ;
+			sidman.setNpayMid(NPAY_MID) ;
+			sidman.notSynchronizeServices("9,7,11");
+			sidman.synchronizeServices( cid, con ) ;
+			//Кусок отвечающий за перерасчет абонплаты
+			// месяц за который идёт перерасчёт
+			//dateTask = new GregorianCalendar();
+			// набор услуг, 0- все услуги
+			//serviceSet = 0;
+			//Комментарий задачи
+			//comment = "";
+			//email = "null";
+			//new RunTaskDataManager( con ).addTask( new Recalculator( NPAY_MID, dateTask, email, serviceSet, Integer.toString(cid), comment ) );
+			//--------------------------------------------------------------------
+			//
+			++count;
+		}
+		ps.close();
+		System.out.println( "Total "+count_all+" contracts, processed " + count + " contracts..." );
+		//
+		long timeEnd = System.currentTimeMillis();
+		System.out.println( "Process time: " + (timeEnd - timeStart)/1000 + " s." );
+	}
+
+	//--------------------------------------------------------------------
+	// кусок кода из старого скрипта (немного подправлен с BGBS)
+	//--------------------------------------------------------------------
+
+	//Класс синхронизации услуг
+	public static class SidsSynchroManager
+	{
+
+		public SidsSynchroManager()
+		{
+			vSidsData = new Vector() ;
+			vNpaySidsData = new Vector() ;
+			GregorianCalendar cal = new GregorianCalendar() ;
+			cal.set(1970, 0, 1 ) ;
+			_DATE1_NULL = cal.getTime() ;
+			cal.set(2020, 0, 1 ) ;
+			_DATE2_NULL = cal.getTime() ;
+		}
+
+		public void setNpayMid( int npayMid)
+		{
+			NPAY_MID = npayMid ;
+		}
+		public void setDebugMode(int debug)
+		{
+			_DEBUG = debug ;
+		}
+		//Не синхронизировать список услуг. через запятую.
+		public void notSynchronizeServices( String sids )
+		{
+			noSynchroList = sids ;
+		}
+		public void setDeleteNonNeeded( int dnn)//0 - Не удалять не нужные сервисы, 1 - удалять
+		{
+			deleteNonNeeded = dnn ;
+		}
+		//Точка входа. Синхронизирует сервисы договора
+		public void synchronizeServices( int cid, Connection con ) throws Exception
+		{
+			vSidsData.clear() ;
+			vNpaySidsData.clear() ;
+			//Выбираем глобальные тарифы, и запоминаем периоды действия их услуг
+			String SQL = "SELECT tree_id, t.title, ct.date1, ct.date2 " +
+	            "FROM contract_tariff AS ct LEFT JOIN tariff_plan as t ON ct.tpid=t.id " +
+	            "WHERE ct.cid=" + cid ;
+			//print(SQL) ;
+			PreparedStatement ps = con.prepareStatement( SQL );
+			ResultSet rs = ps.executeQuery();
+			while ( rs.next() )
+			{
+				int tree_id = rs.getInt("tree_id") ;
+				String title = rs.getString("title") ;
+				Date date1 = rs.getDate("ct.date1") ;
+				Date date2 = rs.getDate("ct.date2") ;
+				if ( _DEBUG == 1 ) {
+					System.out.println ("tree_id=" + tree_id + " title=" + title + " date1=" + TimeUtils.format(date1, "yyyy-MM-dd") + " date2="
+						+ TimeUtils.format(date2, "yyyy-MM-dd") ) ;
+				}
+				findServicesForTariff( tree_id, 0, date1, date2, con) ;//Сохраняем услуги в набор
+			}
+			rs.close();
+			ps.close();
+			//Выбираем персональные тарифы, и запоминаем периоды действия их услуг
+			SQL = "SELECT tree_id, title, date1, date2 FROM contract_tree_link WHERE cid=" + cid ;
+			ps = con.prepareStatement( SQL );
+			rs = ps.executeQuery();
+			if ( _DEBUG == 1 ){
+				System.out.println("personals") ;
+			}
+			while ( rs.next() )
+			{
+				int tree_id = rs.getInt("tree_id") ;
+				String title = rs.getString("title") ;
+				Date date1 = rs.getDate("date1") ;
+				Date date2 = rs.getDate("date2") ;
+				if( _DEBUG == 1 )	{
+					System.out.println ("tree_id=" + tree_id + " title=" + title + " date1=" + TimeUtils.format(date1, "yyyy-MM-dd") + " date2="
+						+ TimeUtils.format(date2, "yyyy-MM-dd") ) ;
+				}
+				findServicesForTariff( tree_id, 0, date1, date2, con ) ;
+			}
+			rs.close();
+			ps.close();
+
+
+			//Для каждой услуги синхронизируем периоды действия, отбрасывая пересекающиеся периоды
+			calcActualServicePeriods( vSidsData ) ;
+			//Тоже самое для услуг Абонплат.
+			calcActualServicePeriods( vNpaySidsData ) ;
+
+			//Выводим в вывод, список услуг, так, как они будут заведены. Здесь не могут быть пересекающихся периодов для одной услуги.
+			System.out.println( "Services must be synchronized with folowing date periods") ;
+			printInternalDataForContract( cid ) ;
+
+			//Обновляем услуги договора
+			updateSynchronizedServices( cid, 0, con )		 ;
+			//Обновляем услуги абонплат договора
+			updateSynchronizedServices( cid, NPAY_MID, con )		 ;
+		}
+
+		public void printInternalDataForContract( int cid )
+		{
+			System.out.println("cid="+cid) ;
+			System.out.println("SERVICES:") ;
+			for( int i = 0; i<vSidsData.size(); i++)
+			{
+				vSidsData.get(i).printData() ;
+			}
+			System.out.println("NPAY SERVICES:") ;
+			for( int i = 0; i<vNpaySidsData.size(); i++)
+			{
+				vNpaySidsData.get(i).printData() ;
+			}
+
+		}
+
+		private void updateSynchronizedServices( int cid, int nPayMid, Connection con ) throws Exception
+		{
+			String SQLdelNonNeeded = "" ;
+			String SQLsel = "" ;
+			String SQLupd = "" ;
+			String SQLins = "" ;
+			String SQLdel = "" ;
+			Vector<SidsData> vSids = vSidsData ;
+			String dateNow = TimeUtils.format(new GregorianCalendar(), "yyyy-MM-dd hh:mm:ss") ;
+			if ( nPayMid == 0 ){
+				SQLsel = "SELECT id, date1, date2 FROM contract_service WHERE cid=" + cid + " AND sid=? ORDER BY date1, date2" ;
+				SQLupd = "UPDATE contract_service SET date1=?, date2=?, comment='Service synchronize(update from " +
+					dateNow + ")' WHERE id=?" ;
+				SQLins = "INSERT INTO contract_service (cid, sid, date1, date2, comment ) VALUES ( " +
+					cid + ", ? , ? , ?, 'Service 	synchronize(insert from " + dateNow + ")')" ;
+				SQLdel = "DELETE FROM contract_service WHERE id=?" ;
+				String sidslist = getServiceList(vSidsData) ;
+				if ( sidslist == "" ) { sidslist = "-1" ;}
+				SQLdelNonNeeded = "DELETE FROM contract_service WHERE cid=" + cid + " AND sid NOT IN (" +
+					sidslist +") AND sid NOT IN (" + noSynchroList + ")" ;
+			}
+			else{
+				vSids = vNpaySidsData ;
+				SQLsel = "SELECT id, date1, date2 FROM npay_service_object_" + nPayMid + " WHERE cid=" + cid + " AND sid=? ORDER BY date1, date2" ;
+				SQLupd = "UPDATE npay_service_object_" + nPayMid + " SET date1=?, date2=?, comment='Service synchronize(update from " +
+					dateNow + ")' WHERE id=?" ;
+				SQLins = "INSERT INTO npay_service_object_" + nPayMid + " (cid, sid, date1, date2, comment ) VALUES ( " +
+					cid + ", ? , ? , ?, 'Service 	synchronize(insert from " + dateNow + ")')" ;
+				SQLdel = "DELETE FROM npay_service_object_" + nPayMid + " WHERE id=?" ;
+				String sidslist = getServiceList(vNpaySidsData) ;
+				if ( sidslist == "" ) {
+					 sidslist = "-1" ;
+				} else { //Список услуг абонплат для синхронизации не пуст. Добавляем в таблицу contract_module запись при необходимости
+					String SQLtmp = "SELECT mid FROM contract_module WHERE cid=" + cid + " AND mid=" + NPAY_MID ;
+					PreparedStatement ps = con.prepareStatement( SQLtmp );
+					ResultSet rs = ps.executeQuery() ;
+					if( !rs.next() )
+					{
+						SQLtmp = "INSERT INTO contract_module (cid,mid) VALUES (" + cid + "," + NPAY_MID + ")" ;
+						ps = con.prepareStatement( SQLtmp );
+						ps.executeUpdate() ;
+					}
+					rs.close();
+					ps.close();
+				}
+
+				SQLdelNonNeeded = "DELETE FROM npay_service_object_" + nPayMid + " WHERE cid=" + cid + " AND sid NOT IN (" + sidslist + ") AND sid NOT IN (" + noSynchroList + ")" ;
+			}
+
+
+
+			if ( deleteNonNeeded == 1 )
+			{
+
+				System.out.println( SQLdelNonNeeded ) ;
+				PreparedStatement psDelOther = con.prepareStatement( SQLdelNonNeeded ) ;
+				psDelOther.executeUpdate( SQLdelNonNeeded ) ;
+			}
+			PreparedStatement ps = con.prepareStatement( SQLsel );
+			PreparedStatement psUpd = con.prepareStatement( SQLupd );
+			PreparedStatement psIns = con.prepareStatement( SQLins );
+			PreparedStatement psDel = con.prepareStatement( SQLdel );
+
+			ResultSet rs ;
+			SidsData sd ;
+			Date date1 = null, date2 = null ;
+			for( int i = 0; i<vSids.size(); i++)
+			{
+				sd = vSids.get(i) ;
+				int sid = sd.sid ;
+				ps.setInt(1, sid) ;
+				rs = ps.executeQuery() ;
+				int j = 0 ;
+				while( rs.next() )
+				{
+					int id = rs.getInt("id") ;
+					date1 = rs.getDate("date1") ;
+					date2 = rs.getDate("date2") ;
+					//Чтобы при сравнении дат equals не давал exeption, подменяем значения null
+					//print( "date1=" + TimeUtils.format(date1, "yyyy-MM-dd") + " date2=" + TimeUtils.format(date2, "yyyy-MM-dd")) ;
+					if ( date1 == null ){
+						date1 = (Date) _DATE1_NULL.clone() ;
+					}
+					if ( date2 == null ){
+						date2 = (Date) _DATE2_NULL.clone() ;
+					}
+					//Лишняя услуга, удаляем
+					if ( j >= sd.vDate1.size() )
+					{
+						psDel.setInt( 1, id ) ;
+						psDel.executeUpdate() ;
+						if (_DEBUG==1){
+							System.out.println( "Delete service with id=" + id + " for service="+sid +
+						" date1=" + TimeUtils.format(date1, "yyyy-MM-dd") + " date2=" + TimeUtils.format(date2, "yyyy-MM-dd")) ;
+							System.out.println( "psDel=" + psDel ) ;
+						}
+						continue ;
+					}
+
+
+					if ( !date1.equals(sd.vDate1.get(j)) || !date2.equals(sd.vDate2.get(j)) )
+					{
+						//Возвращаем значения null при необходимости  для обновления инфы в БД
+						if ( sd.vDate1.get(j).equals( _DATE1_NULL) ){
+							sd.vDate1.set( j, null ) ;
+						}
+						if ( sd.vDate2.get(j).equals( _DATE2_NULL) ){
+							sd.vDate2.set( j, null ) ;
+						}
+						psUpd.setInt( 3, id ) ;
+						psUpd.setDate( 1, TimeUtils.convertDateToSqlDate(sd.vDate1.get(j)) ) ;
+						psUpd.setDate( 2, TimeUtils.convertDateToSqlDate(sd.vDate2.get(j)) ) ;
+						psUpd.executeUpdate() ;
+						if (_DEBUG==1){
+							System.out.println( "Update service with id=" + id + " for service="+sid + " previous date1=" +
+							TimeUtils.format(date1, "yyyy-MM-dd") + " date2=" + TimeUtils.format(date2, "yyyy-MM-dd")) ;
+							System.out.println( "psUpd=" + psUpd ) ;
+						}
+					}
+					j++ ;
+				}//end while
+
+				for( ; j < sd.vDate1.size(); j++)
+				{
+					if ( sd.vDate1.get(j).equals( _DATE1_NULL) ){
+						sd.vDate1.set( j, null ) ;
+					}
+					if ( sd.vDate2.get(j).equals( _DATE2_NULL) ){
+						sd.vDate2.set( j, null ) ;
+					}
+					psIns.setInt(1, sid ) ;
+					psIns.setDate( 2, TimeUtils.convertDateToSqlDate(sd.vDate1.get(j)) ) ;
+					psIns.setDate( 3, TimeUtils.convertDateToSqlDate(sd.vDate2.get(j)) ) ;
+					if (_DEBUG==1){
+						System.out.println( "Insert new service="+sid + " date1=" +
+						TimeUtils.format(date1, "yyyy-MM-dd") + " date2=" + TimeUtils.format(date2, "yyyy-MM-dd")) ;
+						System.out.println( "psIns" + psIns ) ;
+					}
+					psIns.executeUpdate() ;
+				}
+
+			}
+
+		}
+
+		private String getServiceList(Vector<SidsData> vSids)
+		{
+			String sids = "";
+			int i ;
+			for( i = 0; i<vSids.size()-1; i++)
+			{
+				sids += "" + vSids.get(i).sid + "," ;
+			}
+			if ( i < vSids.size()) {
+				sids += "" + vSids.get(i).sid ;
+			}
+			return sids ;
+		}
+
+		private void calcActualServicePeriods( Vector<SidsData> vSids )
+		{
+			prepareInternalData() ;
+			SidsData sd ;
+			Vector<Date> vDate1 = new Vector<Date>() ;
+			Vector<Date> vDate2 = new Vector<Date>() ;
+			Date date1 ;
+			Date date2 ;
+			GregorianCalendar date1cal = new GregorianCalendar() ; //Для хранения date1+1 день
+			int k = 0 ;
+			for( int i = 0; i<vSids.size(); i++)
+			{
+				sd = vSids.get(i) ;
+				vDate1.clear() ;
+				vDate2.clear() ;
+				for ( int j = 0 ; j < sd.vDate1.size() ;  )//Отсеиваем ненужные периоды
+				{
+					date1 = sd.vDate1.get(j) ;
+					date2 = sd.vDate2.get(j) ;
+					if ( date1.compareTo( date2) > 0 )
+					{
+						System.out.println("Fatal error,  date1=" + TimeUtils.format(date1, "yyyy-MM-dd") + " > date2="
+						+ TimeUtils.format(date2, "yyyy-MM-dd") ) ;
+						System.out.println("Services was not synchronized...") ;
+						return ;
+					}
+					for( j++ ; j<sd.vDate1.size(); j++)
+					{
+						date1cal.setTime( sd.vDate1.get(j) ) ;
+						date1cal.roll(Calendar.DAY_OF_YEAR,-1) ;
+						if ( date2.compareTo(date1cal.getTime()) < 0 ) // Нашли нужный date2 для date1 ;
+						{
+							break ;
+						}
+						else
+						{
+							date2 = sd.vDate2.get(j) ;
+						}
+					}
+					vDate1.add(date1) ;
+					vDate2.add(date2) ;
+				}
+
+				sd.vDate1.clear() ;
+				sd.vDate2.clear() ;
+				sd.vDate1 = (Vector<Date>) vDate1.clone() ;
+				sd.vDate2 = (Vector<Date>) vDate2.clone() ;
+
+			}
+		}
+
+		private void prepareInternalData()//Подготовливает внутренние данные для основного алгоритма. Сортирует массивы date услуг
+		{
+			SidsData sd ;
+			for( int i = 0; i<vSidsData.size(); i++)
+			{
+				sd = vSidsData.get(i) ;
+				Collections.sort(sd.vDate1 ) ;
+				Collections.sort(sd.vDate2 ) ;
+			}
+			for( int i = 0; i<vNpaySidsData.size(); i++)
+			{
+				sd = vNpaySidsData.get(i) ;
+				Collections.sort(sd.vDate1 ) ;
+				Collections.sort(sd.vDate2 ) ;
+
+			}
+
+		}
+
+		private void addSid( int sid, Date date1, Date date2, int npayService )
+		{
+			String[] noSids = noSynchroList.split(",") ;
+			for ( int  i = 0 ; i<noSids.length; i++ )
+			{
+				if ( Integer.parseInt( noSids[i].trim() ) == sid ) { return ;}
+			}
+			//Заменяем нулевые значения дат значениями _DATE1_NULL и DATE2_NULL соответсвенно
+			if ( date1 == null ) {
+				date1 = (Date) _DATE1_NULL.clone() ;
+			}
+			if ( date2 == null ) {
+				date2 = (Date) _DATE2_NULL.clone() ;
+			}
+
+			Vector<SidsData> vSids = vSidsData;
+			if ( npayService != 0 )
+			{
+				vSids = vNpaySidsData ;
+			}
+			int f = 0 ;
+			SidsData sd ;
+			for ( int i=0; i < vSids.size(); i++ )
+			{
+				sd = vSids.get(i) ;
+				if (sd.sid == sid)
+				{
+					sd.vDate1.add(date1) ;
+					sd.vDate2.add(date2) ;
+					f = 1 ; break ;
+				}
+			}
+			if ( f == 0 )
+			{
+				sd = new SidsData( sid ) ;
+				sd.vDate1.add(date1) ;
+				sd.vDate2.add(date2) ;
+				vSids.add( sd ) ;
+			}
+		}
+
+		private	void findServicesForTariff( int tree_id, int mid /*если не 0, то выборка из родительского тарифа*/,
+	 		Date date1, Date date2, Connection con) throws Exception
+		{
+			String SQL = "SELECT id, mid, parent_tree FROM module_tariff_tree WHERE tree_id=" + tree_id ;
+			if ( mid != 0 )
+			{
+				SQL += " AND mid=" + mid ;
+			}
+			//print(SQL) ;
+			PreparedStatement ps = con.prepareStatement( SQL );
+			ResultSet rs = ps.executeQuery() ;
+
+			while ( rs.next() )
+			{
+				int mtreeid = rs.getInt("id") ;
+				int _mid = rs.getInt("mid") ;
+				int parent_tree = rs.getInt("parent_tree") ;
+				if (parent_tree != 0 )
+				{
+					findServicesForTariff( parent_tree, _mid, date1, date2, con ) ;
+					continue ;
+				}
+				findServicesForTariff2( mtreeid, _mid, date1, date2, con ) ;
+			}
+			rs.close();
+			ps.close();
+		}
+
+		private void findServicesForTariff2( int mtreeid, int mid, Date date1, Date date2, Connection con ) throws Exception
+		{
+			String SQL = "SELECT type, data " +
+				"FROM mtree_node " +
+				"WHERE mtree_id=" + mtreeid + " AND type IN ('service', 'multi_service', 'month_mode', 'day_mode')" ;
+			PreparedStatement ps = con.prepareStatement( SQL ) ;
+			ResultSet rs = ps.executeQuery() ;
+			int sid = 0;
+			while ( rs.next() )
+			{
+				String type = rs.getString("type") ;
+				String data = rs.getString("data") ;
+				//print ( "type=" + type + " data=" + data) ;
+				if (type.equals("service") )
+				{
+					sid = Integer.parseInt( data ) ;
+					addSid( sid, date1, date2, 0 ) ; //Добавляем найденную услугу в набор найденных услуг
+
+					//print ( "sid=" + sid ) ;
+				}
+				else if( type.equals("multi_service") )
+				{
+					String[] ss = data.split("&") ;
+					String[] sids = ss[1].split(",") ;
+					//print ( "sids=" + ss[1] ) ;
+					for ( int i=0; i < sids.length; i++ )
+					{
+						sid=Integer.parseInt(sids[i]) ;
+						addSid( sid, date1, date2, 0 ) ; //Добавляем найденную услугу в набор найденных услуг
+						//print( "sid = " + sid ) ;
+					}
+				}
+				else if( type.equals("month_mode") )
+				{
+					String[] ss = data.split("%") ;
+					for ( int i = 0; i < ss.length ; i++ )
+					{
+						String[] sids=ss[i].split("&") ;
+						if ( sids[0].equals("sid") )
+						{
+							sid = Integer.parseInt(sids[1]) ;
+							addSid( sid, date1, date2, 1 ) ; //Добавляем найденную услугу в набор найденных услуг
+							break ;
+						}
+					}
+					//print( "month_mode sid = " + sid ) ;
+				}
+				else if( type.equals("day_mode") )
+				{
+					String[] ss = data.split("%") ;
+					for ( int i = 0; i < ss.length ; i++ )
+					{
+						String[] sids=ss[i].split("&") ;
+						if ( sids[0].equals("sid") )
+						{
+							sid = Integer.parseInt(sids[1]) ;
+							addSid( sid, date1, date2, 1 ) ; //Добавляем найденную услугу в набор найденных услуг
+							break ;
+						}
+					}
+					//print( "day_mode sid = " + sid ) ;
+				}
+
+			}//end while
+			rs.close();
+			ps.close();
+		}
+
+
+		//внутренниц класс для хранения услуги и множества дат date1 и date2
+		private	static class SidsData
+		{
+			public int sid ;
+			public Vector<Date> vDate1 ;
+			public Vector<Date> vDate2 ;
+
+			public SidsData()
+			{
+				sid = 0 ;
+				vDate1 = new Vector<Date>() ;
+				vDate2 = new Vector<Date>() ;
+			}
+
+			public SidsData( int s )
+			{
+				sid=s ;
+				vDate1 = new Vector<Date>() ;
+				vDate2 = new Vector<Date>() ;
+			}
+			public void printData()
+			{
+				System.out.println ("sid=" + sid) ;
+				for( int i=0; i<vDate1.size(); i++ )
+				{
+					Date date1 = vDate1.get(i) ;
+					Date date2 = vDate2.get(i) ;
+					if ( date1.equals( _DATE1_NULL) ){
+						date1 = null ;
+					}
+					if ( date2.equals( _DATE2_NULL) ){
+						date2 = null ;
+					}
+
+					System.out.println (" date1=" + TimeUtils.format(date1, "yyyy-MM-dd") + " date2="
+						+ TimeUtils.format(date2, "yyyy-MM-dd") ) ;
+				}
+			}
+		}
+
+		private int NPAY_MID=4 ;
+		private int _DEBUG=0 ;
+		private int deleteNonNeeded = 0 ;
+		static private Date _DATE1_NULL ;
+		static private Date _DATE2_NULL ;
+		private Vector<SidsData> vSidsData ;
+		private Vector<SidsData> vNpaySidsData ;
+		private String noSynchroList = "1000000" ;//не синхронизировать услуги.
+	}
+}
+----
+
+== Новый номер договора группе договоров
+
+Если нужно назначить новые номера договоров для группы, еспользуем этот скрипт Разработка Bitel @author dimon
+
+WARNING: Внимание!
+Данное решение/метод/статья относится к версии 6.0 и для других версий может быть неактуальна!
+Вам нужно самостоятельно поправить решение под свои нужды или воспользоваться помощью на форуме.
+Будем признательны, если внизу страницы или отдельной статьёй вы разместите исправленное решение для другой версии или подсказки что надо исправить.
+
+[source,java]
+----
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.util.GregorianCalendar;
+
+import ru.bitel.bgbilling.server.util.Setup;
+import ru.bitel.common.sql.ConnectionSet;
+import bitel.billing.server.contract.bean.ContractPattern;
+import bitel.billing.server.contract.bean.ContractPatternManager;
+
+/**
+ * Т.е. переименовать внутри групп по одному шаблону. Ну в целом не очень сложно,
+ * скрипт выбирает все договоры группы и ставит новый тайтл по какой-то маске. Чтобы дальше
+ * сами нумеровались надо будет шаблон имени договора сделать точно с таким же форматом.
+ * @author dimon
+ */
+public class RenameContract
+{
+	/** группа для обработки */
+	private final static int GROUP = 24;
+	/** id шаблона договора, где находится нужный паттерн именования договора */
+	private final static int PATTERN_ID = 31;
+
+	public void execute( Setup setup, ConnectionSet connectionSet )
+		throws Exception
+	{
+		System.out.println("Start");
+		Connection con  = connectionSet.getConnection();
+		//
+		long timeStart = System.currentTimeMillis();
+		//
+		ContractPattern pattern = new ContractPatternManager( con ).getPattern( PATTERN_ID );
+		//
+		PreparedStatement ps  = con.prepareStatement( "SELECT id, title FROM contract WHERE gr & (1<<?) != 0" );
+		ps.setInt( 1, GROUP );
+		ResultSet rs = ps.executeQuery();
+		int count = 0;
+		while ( rs.next() )
+		{
+			int id = rs.getInt("id");
+			String title = rs.getString("title");
+			String new_title = ContractPatternManager.getContractTitle( con, pattern, new GregorianCalendar(), null );
+			System.out.println(String.format("#%s : %s -> %s", id, title, new_title));
+			// переименование
+            PreparedStatement psc = con.prepareStatement( "UPDATE contract SET title=? WHERE id=?" );
+            psc.setString( 1, new_title );
+            psc.setInt( 2, id );
+            psc.executeUpdate();
+            psc.close();
+			//
+			++count;
+		}
+		ps.close();
+		System.out.println( "Processed " + count + " contracts..." );
+		//
+		long timeEnd = System.currentTimeMillis();
+		System.out.println( "Process time: " + (timeEnd - timeStart)/1000 + " s." );
+	}
+}
+----

@@ -2,10 +2,14 @@
 :nofooter:
 
 * <<bgbilling/about.adoc#, About>>
+** <<bgbilling/about.adoc#users, Контакты>>
 * <<bgbilling/management.adoc#, Администрирование>>
 * <<bgbilling/wildfly.adoc#, WildFly. Личный кабинет>>
 * <<bgbilling/mysql.adoc#, MySQL>>
 * <<bgbilling/kernel/kernel.adoc#, Ядро>>
+* Примеры динамического кода
+** <<bgbilling/kernel/global.adoc#, Глобальные скрипты поведения>>
+** <<bgbilling/kernel/events.adoc#, Скрипты обработки событий>>
 * Модули
 ** <<bgbilling/modules/bill.adoc#, Bill>>
 ** <<bgbilling/modules/dialup.adoc#, DialUp>>

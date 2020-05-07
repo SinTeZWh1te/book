@@ -1,0 +1,1088 @@
+= MySQL
+:toc:
+
+TIP: https://docs.bitel.ru/pages/viewpage.action?pageId=43384846[Документация] по MySQL
+
+== Рекомендации по настройке MySQL
+
+=== Настройка MySQL
+
+Рекомендуемая конфигурация, разбор параметров после.
+Пример сделан для ОС *NIX типа, как наиболее подходящей для высоконагруженных серверов БД. При необходимости его можно адаптировать для Windows системы, изменив соответственно пути файловой системы и пропустив секцию mysqld.safe.
+
+Кодировка 1251 базы данных использовалась по-умолчанию до версии биллинга 6.0 - исторически сложившаяся и не изменяемая как не несущая в себе существенных неудобств.
+Но при большой необходимости (например, требования хранения в БД символов других алфавитов) может быть изменена на UTF-8 или иную, при этом необходимо также скорректировать .properties файлы приложений биллинга на предмет кодировки БД. С версии 6.1 и выше по-умолчанию кодировка используется UTF-8 (для БД "character_set" везде "utf8", настройки "collation" везде "utf8_unicode_ci" (не "utf8_general_ci"))
+
+[source]
+----
+[mysqld]
+datadir = /var/lib/mysql
+tmpdir = /tmp
+socket = /var/lib/mysql/mysql.sock
+user = mysql
+log-slow-queries =/var/log/slowquery.log
+skip-name-resolve
+sql_mode=
+#
+default-storage-engine = innodb
+default-character-set = cp1251
+default-collation = cp1251_general_ci
+#
+wait_timeout = 28800
+max_allowed_packet = 64M
+max_connections = 1000
+#
+memlock
+table_cache = 4096
+thread_cache_size = 64
+thread_concurrency = 2
+#
+# InnoDb
+innodb_file_per_table
+#
+innodb_log_group_home_dir = /var/lib/mysql/
+innodb_buffer_pool_size = 1G
+innodb_additional_mem_pool_size = 16M
+#
+innodb_log_files_in_group = 2
+innodb_log_file_size = 128M
+innodb_log_buffer_size = 8M
+innodb_lock_wait_timeout = 120
+#
+innodb_thread_concurrency = 2
+innodb_flush_log_at_trx_commit = 2
+innodb_flush_method = O_DIRECT
+#
+# MyIsam
+#key_buffer_size = 1G
+#myisam_recover
+#myisam_repair_threads = 1
+#myisam_data_pointer_size = 6
+#
+# Replication
+#server-id = 1
+#log-bin=/var/lib/mysql-binlog/mysql-bin
+#expire_logs_days = 3
+#replicate-do-db=bgbilling
+#relay-log-space-limit = 10G
+#
+[mysqld_safe]
+open-files-limit = 32000
+log-error = /var/log/mysqld.log
+pid-file = /var/run/mysqld/mysqld.pid
+#
+[client]
+default-character-set = cp1251
+#
+[mysqldump]
+max_allowed_packet = 50M
+default-character-set = cp1251
+----
+
+*Опции mysqld - общие параметры:*
+
+* *datadir* - каталог для хранения БД, лучше если это будет отдельный диск (RAID); высокие требования по надёжности и скорости.
+* *tmpdir* - каталог для хранения временных файлов, лучше сделать отдельным быстрым диском; невысокие требования по надёжности, высокие по скорости; можно использовать RAM диск.
+* *socket* - файловый сокет, возможность подключения консольным клиентом.
+* *user* - пользователь ОС, под которым запускается БД.
+* *log-slow-queries* - логирование запросов, выполняющихся длительное время.
+* *skip-name-resolve* - отключает DNS резолвинг для устанавливаемых соединений.
+* *default-storage-engine* - тип хранилища таблиц по-умолчанию, InnoDB - транзакционный тип хранилища.
+* *default-character-set* - кодировка по-умолчанию для вновь создаваемых таблиц.
+* *default-collation* - collation (порядок букв, используется при сортировке) по-умолчнию для вновь создаваемых таблиц.
+* *sql_mode* - запрещается установка режимов STRICT_TRANS_TABLES и STRICT_ALL_TABLES, это приведёт к неработоспособности некоторых компонентов биллинговой системы.
+* *max_allowed_packet* - максимальный размер пакета с запросом, принимаемого сервером.
+* *max_connections* - ограничение на максимальное число соединений с БД.
+* *memlock* - запрет на перенос процесса mysqld в свап.
+* *table_cache* - число кэшируемых потоков.
+После обработки запроса сервер не будет завершать поток, а разместит его в кэше, если число потоков, находящих в кэше меньше, чем указанное значение.
+* *thread_cache_size* - размер кэша потоков для предотвращения их повторного создания.
+* *thread_concurrency* - число одновременно работающих потоков, рекомендуется ставить 2 * количество CPU + количество дисков.
+
+Запрещается установка опции skip-*networking*, т.к. Java приложение подключается к серверу с использованием TCP протокола, а не через файловый сокет.
+
+*Опции mysqld - InnoDB:*
+
+* *innodb_file_per_table* - для возможности использования Backup базы с помощью snapshot'ов (Linux, LVM) в ОС LINUX.
+* *innodb_log_group_home_dir* - путь к каталогу под журнал транзакций, лучше если это будет отдельный диск; высокие требования по скорости и надёжности, низкие по объёму.
+* *innodb_buffer_pool_size* - размер буфера под все нужды, он должен составлять порядка 70-80 % от общей памяти сервера БД.
+* *innodb_additional_mem_pool_size* - параметр можно не изменять, размер буфера под доп. цели.
+* *innodb_log_files_in_group* - количество файлов журналов транзакций в группе журналов; InnoDB производит запись в файлы по круговому способу; увеличение ускоряет запись, но тормозит восстановление информации в случае сбоя.
+* *innodb_log_file_size* - размер каждого файла журнала в группе журналов (указывается в мегабайтах).
+* *innodb_log_buffer_size* - размер буфера, который в InnoDB используется для записи информации файлов журналов на диск.
+* *innodb_lock_wait_timeout* - время простоя (в секундах), на протяжении которого транзакция InnoDB может ожидать прекращения блокировки прежде, чем будет произведен откат.
+* *innodb_thread_concurrency* - должно совпадать с thread_concurrency; число одновременно работающих потоков, рекомендуется ставить 2 * количество CPU + количество дисков.
+* *innodb_flush_log_at_trx_commit* - 2 отменяет сброс данных на диск при каждой транзакции, ускорение работы.
+* *innodb_flush_method* - O_DIRECT отключает двойную буферизацию (самим mysql и ОС).
+
+*Опции mysqld -MyIsam, если используется (например, для некритичных таблиц):*
+
+* *key_buffer_size* - размер кэша для хранения индексов;
+* *myisam_recover* -восстановление битых таблиц при старте сервера.
+* *myisam_repair_threads* - число потоков восстановления.
+* *myisam_data_pointer_size* - возможность создания больших первичных ключей в таблицах.
+
+*Опции mysqld - репликации, если используется:*
+
+* *server-id* - идентификатор сервера.
+* *log-bin* - место хранение bin-логов; лучше если это будет отдельный диск, высокие требования по скорости и надёжности, малые по объёму.
+* *expire_logs_days* - автоматическое удаление старых bin-логов.
+* *replicate-do-db* - реплицируемая БД.
+* *relay-log-space-limit* - ограничение на объём bin-логов.
+
+*Опции mysqld_safe:*
+
+* *open-files-limit* - лимит количества открытых файлов для ОС Linux.
+* *log-error* - файл для логирования ошибок.
+* *pid-file* - PID файл процесса.
+
+*Опции mysqldump:*
+
+* *max_allowed_packet* - установка маскимально возможного размера пакета при снятии дампов утилитой mysqldump.
+* *default-character-set* - кодировка по-умолчанию при снятии дампов БД.
+
+*Опции client:*
+
+*default-character-set* - кодировка по-умолчанию при подключении консольным клиентом.
+В качестве примера конфигурации вы также можете использовать примеры конфигурации MySQL (`/usr/share/mysql/my-innodb-heavy-4G.cnf`).
+
+Ссылки:
+
+http://mysql.ru/docs/man/ - общее руководство по администрированию.
+
+http://mysql.ru/docs/man/InnoDB_start.html - параметры настройки InnoDb.
+
+http://mysql.ru/docs/man/Replication_Options.html - параметры настройки репликации.
+
+http://maxq.ru/lib/53/ - рекомендации по настройке InnoDb базы, MyIsam базы.
+
+http://mysqltuner.pl/mysqltuner.pl - скрипт автоматической настройки параметров БД.
+
+=== Настройка MySQL для Windows 7
+
+Ниже Вы можете ознакомиться с примерами файла my.ini, настроенного в соответствии с вышеописанными рекомендациями под ОС Windows 7 x32. По разным причинами, связанными в основном с обновлением программного обеспечения MySQL, некоторые переменные и методы в файле конфигурации могут вызывать конфликты при запуске службы сервера MySQL.
+
+Стоит отметить, что начиная с версии 5.6 служба может быть занесена в реестр не как MySQL, а как MySQL56. Также, если в вашей системе остались какие-либо данные о предыдущих установках MySQL, имя службы может принять дополнительный порядковый номер, как например MySQL56_1. Присвоенные имена служб можно проверить через services.msc или диспетчер задач.
+Будьте внимательны, не все службы можно отследить через msconfig.exe!
+В случае, если служба называется не MySQL, стоит подправить строку dependencies в server.ini, который находится в установочной директории сервера BGBilling, и исправить название службы на действительное.
+
+Итак, ниже приведены два примера my.ini.
+Первый использовался для запуска MySQL версии 5.1, второй - 5.6.
+
+MySQL 5.1
+
+[source]
+----
+[client]
+port=3306
+default-character-set=cp1251
+
+[mysql]
+default-character-set=cp1251
+
+[mysqld]
+port=3306
+basedir="C:/mysql"
+datadir="C:/ProgramData/MySQL/MySQL Server 5.1/Data"
+tmpdir = "C:/tmpserver"
+socket="C:/mysql/mysql.sock"
+user=mysql
+log-slow-queries=C:/mysql/log/slowquery.log
+skip-name-resolve
+#
+character-set-server=cp1251
+default-storage-engine = INNODB
+default-character-set=cp1251
+default-collation=cp1251_general_ci
+sql-mode=
+#
+max_allowed_packet=50M
+max_connections=800
+#
+memlock
+table_cache=4096
+thread_cache_size=300
+thread_concurrency=2
+#
+# InnoDb
+innodb_file_per_table
+#
+innodb_log_group_home_dir = "C:/mysql/lib/"
+innodb_buffer_pool_size = 1G
+innodb_additional_mem_pool_size = 16M
+#
+innodb_log_files_in_group = 2
+innodb_log_file_size = 128M
+innodb_log_buffer_size = 8M
+innodb_lock_wait_timeout = 120
+#
+innodb_thread_concurrency = 2
+innodb_flush_log_at_trx_commit = 2
+#innodb_flush_method = O_DIRECT
+#
+# MyIsam
+#key_buffer_size = 1G
+#myisam_recover
+#myisam_repair_threads = 1
+#myisam_data_pointer_size = 6
+#
+# Replication
+#server-id=1
+#log-bin=/var/lib/mysql-binlog/mysql-bin
+#expire_logs_days=3
+#replicate-do-db=bgbilling
+#relay-log-space-limit = 10G
+#
+[mysqldump]
+max_allowed_packet=50M
+default-character-set=cp1251
+----
+
+MySQL 5.6
+
+[source]
+----
+[client]
+port=3306
+default-character-set=cp1251
+
+[mysql]
+default-character-set=cp1251
+
+[mysqld]
+port=3306
+basedir="C:/MySQL/MySQL Server 5.6"
+datadir="C:/ProgramData/MySQL/MySQL Server 5.6/data"
+tmpdir = "C:/tmpserver"
+socket="C:/mysql/mysql.sock"
+user=mysql
+#log-slow-queries="C:/MySQL/MySQL Server 5.6/slowquery.log"
+skip-name-resolve
+#
+character-set-server=cp1251
+default-storage-engine = INNODB
+#default-character-set=cp1251
+#default-collation=cp1251_general_ci
+sql-mode=
+#
+max_allowed_packet=50M
+max_connections=800
+#
+memlock
+#table_cache=4096
+thread_cache_size=300
+thread_concurrency=2
+#
+# InnoDb
+innodb_file_per_table
+#
+innodb_log_group_home_dir = "C:/MySQL/MySQL Server 5.6/lib/"
+innodb_buffer_pool_size = 1G
+innodb_additional_mem_pool_size = 16M
+#
+innodb_log_files_in_group = 2
+innodb_log_file_size = 128M
+innodb_log_buffer_size = 8M
+innodb_lock_wait_timeout = 120
+#
+innodb_thread_concurrency = 2
+innodb_flush_log_at_trx_commit = 2
+#innodb_flush_method = O_DIRECT
+#
+# MyIsam
+#key_buffer_size = 1G
+#myisam_recover
+#myisam_repair_threads = 1
+#myisam_data_pointer_size = 6
+#
+# Replication
+#server-id=1
+#log-bin=/var/lib/mysql-binlog/mysql-bin
+#expire_logs_days=3
+#replicate-do-db=bgbilling
+#relay-log-space-limit = 10G
+#
+[mysqldump]
+max_allowed_packet=50M
+#default-character-set=cp1251
+----
+
+== Backup MySQL базы с помощью snapshot'ов (Linux, LVM)
+
+*Проблема*: резервирвание базы данных объемом несколько десятков или сотен гигабайт без остановки сервиса.
+
+Можно использовать "взрослые" накопители типа NAS/SAN, которые имеют встроенную поддержку снапшотов и резервного копирования информации, но это решения дорогостоящие (хотя, что может быть ценнее информации, которая является основой для расчетов с абонентами? вопрос риторический).
+Поэтому мы пойдем "пионерским" путем.
+Нам потребуется обычный linux с поддержкой lvm/lvm2. О том, как подготовить дисковое хранилище для размещения базы, я тут особо распространяться не буду.
+Желающие всегда могут почитать man'ы (pvcreate/vgcreate/lvcreate сотоварищи).
+Замечу только, что при создании logical volume для хранения базы необходимо оставлять порядка 2-4% нераспределенных physical extents для того, чтобы lvm было куда писать измененные данные во время бекапа.
+Пример:
+
+[source]
+----
+# vgdisplay vg1
+  --- Volume group ---
+  VG Name               vg1
+  System ID
+  Format                lvm2
+  Metadata Areas        1
+  Metadata Sequence No  3201
+  VG Access             read/write
+  VG Status             resizable
+  MAX LV                0
+  Cur LV                1
+  Open LV               1
+  Max PV                0
+  Cur PV                1
+  Act PV                1
+  VG Size               271.94 GB
+  PE Size               32.00 MB
+  Total PE              8702
+  Alloc PE / Size       8650 / 270.31 GB
+  Free  PE / Size       52 / 1.62 GB
+  VG UUID               LgXAR3-SPn6-skB8-O0Y0-HI8N-o6gh-0Zy7qc
+----
+
+Здесь я оставил нераспределенными 52 extent'а, что в сумме дает 1.6 гигабайт.
+Этого вполне хватает для работы базы в течение получаса.
+Если не хочется рисковать - можно увеличить процент нераспределенных extent'ов.
+
+Итак, предположим, что хранилище под базу соответствует соглашению: оно находится на logical volume, и volume group имеет достаточно нераспределенных extent'ов.
+Далее все, что нам нужно - это написать пару скриптов, которые будут создавать снапшот и копировать информацию.
+Кроме штатных средств (lvcreate, lvremove) нам потребуется пакет rsync.
+Хочется сразу отметить, что полный бекап базы объемом пару десятков гигабайт может занять несколько часов, поэтому мы будем использовать для копирования rsync, который позволяет копировать только измененные файлы (и даже только части измененных файлов).
+Это означает, что на момент бекапа где-то (там, куда мы копируем текущую базу) уже должна быть хотя бы частично скопированная база, актуальная на какой-то момент в прошлом.
+Это также означает, что мы имеем всего лишь один бекап - по состоянию на момент последнего резервирования (то есть, если бекап производится раз в сутки - бекап за прошлые сутки).
+Эту схему, конечно, можно модифицировать, но упражнение по модификации пусть будет вашим домашним заданием.
+Мы же решаем вполне конкретную задачу: получить консистентную копию базы без прерывания сервиса.
+
+Итак, скрипт №1 (`/usr/local/libexec/backupdb/backup.sh`):
+
+[source]
+----
+#!/bin/sh
+
+lvcreate=/usr/sbin/lvcreate
+lvremove=/usr/sbin/lvremove
+mysql=/usr/bin/mysql
+mount=/bin/mount
+umount=/bin/umount
+rsync=/usr/bin/rsync
+snapscript=/usr/local/libexec/backupdb/makesnap.sh
+nice=/bin/nice
+date=/bin/date
+
+created=0
+
+echo $($date '+%Y-%m-%d %H:%M:%S') creating snapshot
+$mysql <<-LCK
+        FLUSH TABLES WITH READ LOCK;
+        system /bin/sh $snapscript
+        UNLOCK TABLES;
+LCK
+echo $($date '+%Y-%m-%d %H:%M:%S') mounting snapshot
+$mount -r /dev/vg1/snap /snapshot
+echo $($date '+%Y-%m-%d %H:%M:%S') mounting backup storage
+$mount /backup
+echo $($date '+%Y-%m-%d %H:%M:%S') rsyncing...
+$nice -n 19 $rsync -aH --bwlimit=25000 --delete /snapshot/ /backup/
+echo $($date '+%Y-%m-%d %H:%M:%S') unmounting snapshot
+$umount /snapshot
+echo $($date '+%Y-%m-%d %H:%M:%S') removing snapshot
+$lvremove -f vg1/snap >/dev/null 2>&1
+echo $($date '+%Y-%m-%d %H:%M:%S') unmounting backup storage
+$umount /backup
+----
+
+Скрипт №2 (`/usr/local/libexec/backupdb/makesnap.sh`):
+
+[source]
+----
+#!/bin/sh
+
+lvcreate=/usr/sbin/lvcreate
+lvremove=/usr/sbin/lvremove
+sleep=/bin/sleep
+sync=/bin/sync
+
+created=0
+
+while [ $created -eq 0 ] ; do
+        $sync ; $sync
+        $lvcreate -s -l 52 -Mn -n snap vg1/storage >/dev/null 2>&1
+        if [ $? -eq 0 ] ; then
+                created=1
+        else
+                $lvremove -f vg1/snap >/dev/null 2>&1
+        fi
+        $sleep 1
+done
+----
+
+Здесь:
+
+* */dev/vg1* - volume group, на которой у меня располагается logical volume "storage" (хранилище базы данных)
+* */dev/vg1/storage* - собственно логический том "storage"
+* */dev/vg1/snap* - снапшот этого логического тома
+* */backup/* - раздел, где располагается копия базы данных, для простоты я внес раздел в /etc/fstab с опцией noauto
+
+Зачем так сложно, в два скрипта?
+Почему не сделать один?
+Все просто: база должна быть консистентной.
+Этого можно добиться только временно заблокировав все таблицы на момент снятия снапшота, чем и занимается скрипт №2.
+
+TIP: Кстати, хозяйке на заметку.
+Если по какой-то причине скрипт №2 не сможет сделать снапшот, он заблокирует работу MySQL перманентно, до прерывания.
+В качестве домашнего задания модифицируйте скрипты так, чтобы скрипт №2 выполнял не более, скажем, 30 попыток сделать снапшот и в случае неудачи всех попыток скрипт №1 вместо удаления копии базы завершал работу с корректной диагностикой.
+Правда, я столкнулся с такой ситуацией всего один раз, но это не значит, что креститься надо строго после того как грянет гром.
+=)
+
+Обратите внимание на строчку создания снапшота в скриипте №2. Я задействовал все свободные PE из группы (52 штуки).
+Как говорится, YMMV.
+
+После этого делаем примерно так:
+
+[source]
+----
+# ln -s /usr/local/libexec/backupdb/backup.sh /etc/cron.daily/backupdb
+----
+
+И еще нам нужно подготовить первичную копию базы для последующего бекапа.
+Это можно сделать все тем же rsync'ом:
+
+[source]
+----
+# mount /backup
+# rsync -aH --bwlimit=10000 /storage/ /backup/
+# umount /backup
+----
+
+Обратите внимание на два момента:
+
+* Я ограничиваю скорость копирования опцией bwlimit.
+Это необходимо для того, чтобы не нарушать нормальную работу базы
+* Нас не заботит консистентность базы.
+Все равно очередной бекап "доведет" ее до состояния консистентности благодаря возможностям rsync
+* При использования хранилица InnoDB реализация данной схемы возможна при запуске mysqld с ключем --innodb_file_per_table, что заставит MySQL хранить каждую InnoDB таблицу в отдельном файле.
+См.: http://dev.mysql.com/doc/refman/5.0/en/multiple-tablespaces.html
+
+== Установка триггера в MySQL для отслеживания изменений
+
+Временами возникает проблема непонятных изменений в БД биллинга.
+Очень хорошее средство для локализации и отладки проблемы - установить на изменяющуюся таблицу триггер, который будет логировать в отдельную таблицу время изменения.
+Установка точного времени изменения очень облегчает задачу поиска причины изменения.
+Для примера, триггер, отслеживающий вставку данных в таблицу статусов подписки модуля CerberCrypt и логирующий изменения в отдельную таблицу events_log_18_insert.
+
+[source,sql]
+----
+CREATE TABLE `events_log_18_insert` (
+`id` INT NOT NULL AUTO_INCREMENT PRIMARY KEY ,
+`create_date` DATETIME NOT NULL ,
+`cpid` INT NOT NULL ,
+`status` SMALLINT NOT NULL
+);
+
+DELIMITER |
+CREATE TRIGGER `event_logger` AFTER INSERT ON `event_log_18`
+FOR EACH ROW BEGIN
+INSERT INTO events_log_18_insert (create_date, cpid, STATUS) VALUES (now(), new.cpid, new.type);
+END;
+|
+DELIMITER;
+----
+
+== Скрипт восстановления MySQL репликации
+
+Скрипт на BASH предназначен для пропуска сбойного MySQL запроса, приведшего к остановке реплицирования.
+Хорошо бы дополнить информированием на E-Mail.
+
+[source]
+----
+#!/bin/bash
+## Tool to unstick MySQL Replicators.
+## Set to run from cron once a minute.
+
+# */1 * * * * /usr/local/bin/whip_slave_mysql > /dev/null 2>&1
+
+# Last updated: MM/DD/YYYY
+
+COMMANDS="mysql grep awk logger"
+
+export PATH='/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin'
+
+for i in $COMMANDS
+do
+        X=`echo $i | tr '[a-z]' '[A-Z]'`
+        export $X=`type -p $i`
+done
+
+# Define variables
+USERNAME=root
+PASSWORD=xxxxxxxx
+
+# Define Functions
+## Obtain MwSQL slave server status
+function SLAVE()
+{
+        STATUS=`$MYSQL -u $USERNAME -p$PASSWORD -e \
+                "SHOW SLAVE STATUS \G" |
+                $GREP Seconds_Behind_Master |
+                $AWK '{print $2}'`
+}
+
+## Skip errors
+function UNSTICK()
+{
+        $MYSQL -u $USERNAME -p$PASSWORD -e \
+                "STOP SLAVE; SET GLOBAL SQL_SLAVE_SKIP_COUNTER = 1; START SLAVE;"
+        sleep 5
+        # Check everything again
+        CHECK
+}
+
+## Decide what to do...
+function CHECK()
+{
+        # Obtain status
+        SLAVE
+        if [ $STATUS = NULL ]
+        then
+                # I think the replicator is broken
+                echo "MySQL Slave database is not replicating. Fixing..." | $LOGGER
+                UNSTICK
+        else
+                # Everything should be fine
+                echo "MySQL Slave is $STATUS seconds behind its Master." | $LOGGER
+        fi
+}
+
+## Are we running?
+function ALIVE()
+{
+        UP=`$MYSQL -u $USERNAME -p$PASSWORD -e \
+                "SHOW SLAVE STATUS \G" |
+                $GREP Slave_IO_Running |
+                $AWK '{print $2}'`
+
+        if [ $UP = Yes ]
+        then
+                # Let's check if everything is good, then...
+                CHECK
+        else
+                # Uh oh...let's not do anything.
+                echo "MySQL Slave IO is not running!" | $LOGGER
+                exit 1
+        fi
+}
+
+# How is everything?
+ALIVE
+
+#EoF
+exit 0
+----
+
+== Simple DB backup
+
+Схема проверена и годится для переноса DB на другой сервер.
+
+Используем http://www.percona.com/software/percona-xtrabackup[Percona XtraBackup] +
+Собирать и компилить ничего не надо - качаем binary, просто кидаем содержимое в каталог типа `/usr/sbin/` что бы пути не писать.
+
+`cat /etc/rc.d/rc.full.backup`
+
+[source]
+----
+#!/bin/bash
+
+s_date=`date "+%Y-%m-%d_%H-%M-%S"`
+
+s_date_log=$s_date'_log'
+
+innobackupex \
+--defaults-file=/var/lib/mysql/my.cnf.b \
+--no-lock \
+--no-timestamp \
+--ibbackup=/usr/bin/xtrabackup_55 \
+--user=root \
+--password=mypassword \
+/var/BACKUP/$s_date > /var/BACKUP/$s_date_log 2>&1
+
+cp /var/lib/mysql/my.cnf /var/BACKUP/$s_date
+tar -cvzf /var/BACKUP/$s_date.tar.gz /var/BACKUP/$s_date >/dev/null 2>&1
+rm -rf /var/BACKUP/$s_date
+----
+
+WARNING: внимание на my.cnf.b - это тот же my.cnf, только пути проставлены полные, типа: +
+datadir=/var/lib/mysql/db +
+innodb_data_home_dir = /var/lib/mysql/db +
+innodb_log_group_home_dir = /var/lib/mysql/log
+
+`cat prepare.backup.sh`
+
+[source]
+----
+#!/bin/bash
+
+log=$1'_log'
+
+innobackupex \
+--use-memory=1G \
+--defaults-file=/var/lib/mysql/my.cnf.b \
+--apply-log \
+--ibbackup=xtrabackup_55 \
+--user=root \
+--password=mypassword \
+/var/BACKUP/$1 > /var/BACKUP/$log 2>&1
+----
+
+Само восстановление проводить лучше уже руками: +
+*бездумно не стоит копировать эти строки*
+
+[source]
+----
+#/etc/init.d/mysql stop
+#rm -rf /var/lib/mysql/db
+#mkdir /var/lib/mysql/db
+
+#cp -av /var/BACKUP/full/bgbilling /var/lib/mysql/db
+#cp -av /var/BACKUP/full/mysql /var/lib/mysql/db
+#cp -av /var/BACKUP/full/performance_schema /var/lib/mysql/db
+#cp -av /var/BACKUP/full/ibd* /var/lib/mysql/db
+
+#chown -R mysql:mysql /var/lib/mysql/db
+#chown -R mysql:mysql /var/lib/mysql/log
+
+#chmod -R 775 /var/lib/mysql/
+
+#/etc/init.d/mysql start
+----
+
+Следует отметить, что если `ls -al /var/lib/mysql/bgbilling/*.ibd|wc -l` будет больше 1024 - процесс бэкапа завершиться с ошибкой.
+Workaround этого находится в начале следущего "боевого скрипта" который бэкапит базу с числом таких файлов около 1837....:
+
+[source]
+----
+#!/bin/bash
+#/var/bgb/full - временной каталог для бэкапов
+#/var/sos/ - подмонтированный через сеть, некий райд-массив...
+#боремся с досадным багом перконы
+ulimit -n 4096
+d=`date +%d%m%g_%M%H`
+echo "$d"
+if [ -f /var/bgb/stop ]
+then
+#Предыдущий бэкап сбойнул, уходим отсюда...
+echo "STOP FOUND !"
+echo "$d stop found !" >> /var/bgb/xtra_log
+#Запускаем на компе админа со всего размаху алерт ему в консоль:
+export SSH_ASKPASS="/root/p.sh"
+export DISPLAY=":0"
+#ссашимся на комп админа без пароля но и без предварительного обмена ключами:
+##cat p.sh
+#!/bin/bash
+#echo "МойСамыйСекретныйПарольНаКомпАдмина"
+setsid ssh admin@ip.компа.админа "wall \"А у вас очередной бэкап не прошёл... ;) ! \""
+exit 1
+fi
+#############################################################
+#Начинаем и навсякий случай сразу напишем завещание
+touch /var/bgb/stop
+#Расчищаем место :
+if [ -d /var/bgb/full ] ; then
+rm -rf /var/bgb/full
+fi
+if [ -f /var/bgb/full_log ] ; then
+rm -f /var/bgb/full_log
+fi
+if [ -f /var/bgb/prep_log ] ; then
+rm -f /var/bgb/prep_log
+fi
+if [ -f /var/bgb/full_ok ] ; then
+rm -f /var/bgb/full_ok
+fi
+if [ -f /var/bgb/prep_ok ] ; then
+rm -f /var/bgb/prep_ok
+fi
+#
+echo "FULL BEGIN!"
+innobackupex \
+--defaults-file=/etc/mysql/my.cnf \
+--no-lock \
+--no-timestamp \
+--ibbackup=/usr/bin/xtrabackup_55 \
+--user=root \
+--password=xxxxx \
+/var/bgb/full > /var/bgb/full_log 2>&1
+if [ -z "`tail -1 /var/bgb/full_log | grep 'completed OK!'`" ]
+then
+#Чота с базой нето... валим отсюда, завещание оставляем
+echo "$d full fail!" >> /var/bgb/xtra_log
+echo "FULL FAIL!"
+exit 1
+else
+touch /var/bgb/full_ok
+echo "FULL OK!"
+fi
+##############################################################################
+if [ -f /var/bgb/full_ok ] && [ -d /var/bgb/full ]
+then
+#Вродь бэкап сработал, значит начинаем его приводить в человеческий вид
+echo "PREP BEGIN!"
+innobackupex \
+--use-memory=1G \
+--defaults-file=/etc/mysql/my.cnf \
+--apply-log \
+--ibbackup=xtrabackup_55 \
+--user=root \
+--password=xxxxx \
+/var/bgb/full > /var/bgb/prep_log 2>&1
+if [ -z "`tail -1 /var/bgb/prep_log | grep 'completed OK!'`" ]
+then
+#сбойнуло, валим отсюда, завещание адмниу оставляем...
+echo "$d prep fail!" >> /var/bgb/xtra_log
+echo "PREP FAIL!"
+exit 1
+else
+touch /var/bgb/prep_ok
+echo "PREP OK!"
+fi
+else
+echo "$d full_ok not found!" >> /var/bgb/xtra_log
+echo "FULL_OK NOT FOUND!"
+exit 1
+fi
+##################################################################################
+if [ -f /var/bgb/prep_ok ] && [ -d /var/bgb/full ]
+then
+#Бэкап вродь успешен , начинаем копировать на ремотный стораж...
+echo "COPY BEGIN!...."
+space=`df -h /var/sos|awk '{print $5}'|grep -v Use|cut -d % -f1 -`
+case $space in
+[1-8]*|9)
+echo "/VAR/SOS almost full!"
+;;
+9[1-9])
+echo "/var/sos/ full !" >> /var/bgb/xtra_log
+echo "/VAR/SOS/ cleaning...!"
+for d_i in `find /var/sos/ -maxdepth 1 -type d \( ! -iname "lost+found" ! -name "*.bak" \) -mtime +30 -print`
+do
+echo "$d_i"
+read -s -t5 -n1 -r -p "del ? OK ?" key
+if [ $? -eq 0 ]; then
+    case $key in
+        [Yy]* )
+rm -rf "$d_i";
+;;
+        * )
+echo "$d_i will not deleted"
+;;
+esac
+fi
+done
+#find /var/sos/ -maxdepth 1 -name "full_*" -type d -mtime +17 -exec rm -rf "{}" \;
+;;
+esac
+rm -f /var/sos/cp_*
+if [ -d /var/sos/full ]
+then
+mv /var/sos/full /var/sos/full_$d
+fi
+cp -av /var/bgb/full /var/sos > /var/sos/cp_log 2>&1
+if [ $? != 0 ]
+then
+#Чота сегодня не копируется, блин....
+echo "$d copy fail!" >> /var/bgb/xtra_log
+echo "COPY FAIL!"
+exit 1
+else
+echo "COPY OK!"
+#Ну вродь все! Завещание рвём!
+rm -f  /var/bgb/stop
+fi
+else
+echo "$d prep_ok not found!" >> /var/bgb/xtra_log
+echo "PREP_OK NOT FOUND!"
+exit
+fi
+----
+
+=== Инкрементальные бекапы
+
+Вариант и использованием замечательного свойства percona xtrabackup делать "инкрементальные" бэкапы.
+За день делаются 24 почасовых бэкапа в каталоге "var/bgb/".
+Отличительным свойством этого скрипта является то, что резервная копия базы почти сразу готова к использованию ( кроме последнего шага, отмеченного в скрипте с комментариями `"!1!"` и `"!2!"`.)
+
+[source]
+----
+#!/bin/bash
+#set -x
+#бэкапим базу с такими ключами:
+ARGS_B="--defaults-file=/etc/mysql/my.cnf --no-lock --no-timestamp --ibbackup=/usr/bin/xtrabackup_55 --user=root --password=xxxxx"
+#"препарим" c такими:
+ARGS_P="--use-memory=1G --defaults-file=/etc/mysql/my.cnf --apply-log --ibbackup=xtrabackup_55 --user=root --password=xxxxx"
+#в файле ордер храним порядковый номер бэкапа в течение дня. (от 0 до 23)
+if [ -f /var/bgb/order ]
+then
+source /var/bgb/order
+else
+echo "order=0" > /var/bgb/order
+order=0
+fi
+if [[ $order -eq  0 ]]
+ then
+ # в каталоге inc_0 храним полный бэкап в 0 часов, в каталогах inc_1... inc_23 - почасовые инкрементальные.
+  rm -rf /var/bgb/inc_0
+  rm -rf /var/bgb/inc_0.bak
+  rm -f /var/bgb/*_log
+  innobackupex ${ARGS_B}|> /var/bgb/inc_0 > /var/bgb/inc_0_log 2>&1
+  # Навсякий случай делаем копию.
+  cp -a /var/bgb/inc_0 /var/bgb/inc_0.bak
+# "сбэкапили" и тутже частично "препарим" дабы не тратить время когда, настанет час "X"
+  innobackupex ${ARGS_P}|>  --redo-only /var/bgb/inc_0 > /var/bgb/prep_0_log 2>&1
+  echo "order=1" > /var/bgb/order
+ else
+order_next=$((order+1))
+order_prev=$((order-1))
+  rm -rf /var/bgb/inc_${order}|>
+  rm -rf /var/bgb/inc_${order}|>.bak
+  #бэкапим инкрементально
+  innobackupex ${ARGS_B}|> --incremental /var/bgb/inc_${order}|> --incremental-basedir=/var/bgb/inc_${order_prev}|> > /var/bgb/inc_${order}|>_log 2>&1
+  cp -a /var/bgb/inc_${order}|> /var/bgb/inc_${order}|>.bak
+  case $order in
+[1-9]|1[0-9]|2[0-2])
+# все промежуточные инкрементальные бэкапы "препарим" частично.
+             innobackupex  ${ARGS_P}|>  --redo-only /var/bgb/inc_0  --incremental-dir=/var/bgb/inc_${order}|> > /var/bgb/prep_${order}|>_log 2>&1
+             echo "order=$order_next" > /var/bgb/order
+        ;;
+        23)
+# !1! последний дневной бэкап "препарим" полностью.
+             innobackupex ${ARGS_P}|> /var/bgb/inc_0 --incremental-dir=/var/bgback/inc_${order}|> > /var/bgb/prep_${order}|>_log 2>&1
+# !2! последний "prepare" - полный, чтобы создать логи транзакций iblog*.
+             innobackupex ${ARGS_P}|> /var/bgb/inc_0 > /var/bgb/prep_0_${order}|>_log 2>&1
+             echo "order=0" > /var/bgb/order
+        ;;
+   esac
+----
+
+Счастливым обладателям mysql 5.6 ( обладающим свойством transportable tablespaces ) можно изменить строку под комментарием "#!2!..." в виде:
+
+[source]
+----
+innobackupex ${ARGS_P} --export /var/bgb/exp /var/bgb/inc_0 > /var/bgb/prep_0_${order}_log 2>&1.
+----
+
+В этом случае в каталоге /var/bgb/exp появятся индивидуальные экспортные копии каждой таблицы базы, пригодные для восстановления отдельной таблицы innodb:
+
+[source]
+----
+0. DROP TABLE crashed_table;
+1. CREATE TABLE crashed_table (...) ENGINE=InnoDB;
+2. ALTER TABLE crashed_table DISCARD TABLESPACE;
+3. cp crashed_table.{ibd,exp,cfg } /var/lib/mysql/bgbilling
+4. ALTER TABLE crashed_table IMPORT TABLESPACE;
+----
+
+только надо знать структуру каждой таблицы, дабы воспользоваться ей на этапе 1. для этого поможет это скрипт:
+
+[source]
+----
+#!/bin/bash
+mysql -u root -pxxxxx --skip-column-names -e "SELECT table_name FROM information_schema.tables WHERE table_schema = 'bgbilling';" > tables.txt
+cat /dev/null > tables_info.txt
+for x in `cat tables.txt`
+do
+echo "=========================" >> tables_info.txt
+echo "show create table $x;"|mysql -u root -pxxxxx -N bgbilling >> tables_info.txt
+done
+----
+
+Следует с горечью отметить ,что фича "transportable tablespaces" в mysql 5.6 реализована частично и не поддерживает export/import partition-based innodb таблиц.
+Поэтому таблицы с помесячными логами восстановить не удасться без плясок с бубном типа такого:
+
+Допустим надо отремонтировать "партицированную" таблицу "inet_session_10" :
+
+[source]
+----
+CREATE TABLE `inet_session_10` (
+  `id` bigint(20) NOT NULL AUTO_INCREMENT,
+  `parentId` bigint(20) NOT NULL,
+  `splittedId` bigint(20) NOT NULL,
+  `connectionId` bigint(20) NOT NULL,
+  `sessionStart` datetime NOT NULL,
+  `sessionStop` datetime DEFAULT NULL,
+  `lastActive` datetime NOT NULL,
+  `sessionTime` bigint(20) NOT NULL,
+  `sessionCost` decimal(12,5) NOT NULL,
+  `deviceState` smallint(6) NOT NULL DEFAULT '1',
+  `status` smallint(6) NOT NULL,
+  KEY `start` (`sessionStart`),
+  KEY `id` (`id`),
+  KEY `parentId` (`parentId`),
+  KEY `connectionId` (`connectionId`)
+) ENGINE=InnoDB AUTO_INCREMENT=3107890 DEFAULT CHARSET=cp1251
+/*!50100 PARTITION BY HASH (connectionId) PARTITIONS 8 */
+----
+
+Представленную на диске в виде:
+
+[source]
+----
+/var/lib/mysql/bgbilling/inet_session_10.frm
+/var/lib/mysql/bgbilling/inet_session_10.par
+/var/lib/mysql/bgbilling/inet_session_10#P#p0.ibd
+/var/lib/mysql/bgbilling/inet_session_10#P#p1.ibd
+/var/lib/mysql/bgbilling/inet_session_10#P#p2.ibd
+/var/lib/mysql/bgbilling/inet_session_10#P#p3.ibd
+/var/lib/mysql/bgbilling/inet_session_10#P#p4.ibd
+/var/lib/mysql/bgbilling/inet_session_10#P#p5.ibd
+/var/lib/mysql/bgbilling/inet_session_10#P#p6.ibd
+/var/lib/mysql/bgbilling/inet_session_10#P#p7.ibd
+----
+
+Начнём
+
+[source]
+----
+CREATE TABLE _inet_session_10 LIKE inet_session_10;
+ALTER TABLE _inet_session_10 REMOVE PARTITIONING;
+ALTER TABLE _inet_session_10 DISCARD TABLESPACE;
+\!cp /var/bgb/0/bgbilling/inet_session_10#P#p1.exp /var/lib/mysql/_inet_session_10.exp
+\!cp /var/bgb/0/bgbilling/inet_session_10#P#p0.ibd /var/lib/mysql/_inet_session_10.ibd
+ALTER TABLE _inet_session_10 IMPORT TABLESPACE;
+ALTER TABLE inet_session_10 EXCHANGE PARTITION p0 WITH TABLE _inet_session_10;
+ALTER TABLE _inet_session_10 DISCARD TABLESPACE;
+\!cp /var/bgb/0/bgbilling/inet_session_10#P#p1.exp /var/lib/mysql/_inet_session_10.exp
+\!cp /var/bgb/0/bgbilling/inet_session_10#P#p1.ibd /var/lib/mysql/_inet_session_10.ibd
+ALTER TABLE _inet_session_10 IMPORT TABLESPACE;
+ALTER TABLE inet_session_10 EXCHANGE PARTITION p1 WITH TABLE _inet_session_10;
+ALTER TABLE _inet_session_10 DISCARD TABLESPACE;
+\!cp /var/bgb/0/bgbilling/inet_session_10#P#p2.exp /var/lib/mysql/_inet_session_10.exp
+\!cp /var/bgb/0/bgbilling/inet_session_10#P#p2.ibd /var/lib/mysql/_inet_session_10.ibd
+ALTER TABLE _inet_session_10 IMPORT TABLESPACE;
+ALTER TABLE inet_session_10 EXCHANGE PARTITION p2 WITH TABLE _inet_session_10;
+............
+............
+
+ALTER TABLE _inet_session_10 DISCARD TABLESPACE;
+\!cp /var/bgb/0/bgbilling/inet_session_10#P#p7.exp /var/lib/mysql/_inet_session_10.exp
+\!cp /var/bgb/0/bgbilling/inet_session_10#P#p7.ibd /var/lib/mysql/_inet_session_10.ibd
+ALTER TABLE _inet_session_10 IMPORT TABLESPACE;
+ALTER TABLE inet_session_10 EXCHANGE PARTITION p7 WITH TABLE _inet_session_10;
+
+DROP TABLE _inet_session_10;
+----
+
+Эта затея будет работать пока разработчики не введут в базе subpartitions Если подобный способ вводит в уныние ( ведь в базе есть таблицы с 31-ой партицией ), то дожидаться выхода oracle community mysql 5.7, в котором эта фича реализована полностью и который получит статус GA уже в этом тысячилетии.
+
+При использовании инкрементальных бэкапов надо иметь ввиду что каждый инкрементальный бэкап копирует ВСЕ! таблицы *.ibd Вашей базы.
+Даже если LSN в ихних pages меньше LSN , зафиксированного последним инкрементальным бэкапом.
+При этом в "неизменившихся" таблицах копируется тока одна page (~16 K ), содержащая тока заголовок таблицы.
+Это зделано для того чтобы корректно обыгрывать ситуации когда между соседними инкрементальными бэкапами проскочила какая-нибудь DDL-операция, изменяющая сами таблицы, но не данные в них.
+Если таблиц много то сминимизировать время этого процесса можно включив с конфиги сервера "innodb_track_changed_pages = 1" ( если у Вас конечно Percona Server 5.5(6).
+
+После выполнения очередного инкрементального бэкапа необходимо глянуть в файл xtrabackup-checkpoints и запомнить чему равно значение to_lsn = XXX дабы подчистить на винте место для следующих логов статементом PURGE CHANGED_PAGE_BITMAPS BEFORE XXX+1 В Percona Xtrabackup есть досаднейшая ошибка ( точнее ошибка в её файле-враппере innobackupex ) . Если этот скрипт запускать с опцией --no-lock ( что чаще всего и делают, если все базы на движке innodb ) то этот скрипт не делает перед вызовом xtrabackup статемента FLUSH CHANGED_PAGE_BITMAPS и процесс инкрементального бэкапа через innobackupex c использованием innodb_track_changed_pages сделает бэкапы "неконсистентными".
+Это сразу будет видно при последующей стадии prepare.
+Поэтому желательно перед каждым вызовом xtrabackup делать вызов этого статемента самим.
+Вот скрипт, до "посинения" делающий почасовые инкрементальные бэкапы:
+
+[source]
+----
+#!/bin/bash
+while :
+do
+rm -rf /var/bgb ; mkdir /var/bgb
+mysql --login-path=local -e "FLUSH CHANGED_PAGE_BITMAPS;"
+innobackupex --defaults-file=/etc/mysql/my.cnf --no-lock --no-timestamp --user=root --password=XXXXXXXXXXXXXXX /var/bgb/0 > /var/bgb/log_b_0 2>&1
+to_lsn=`grep to_lsn /var/bgb/0/xtrabackup_checkpoints | awk '{ print $3 }'`
+mysql --login-path=local -e "PURGE CHANGED_PAGE_BITMAPS BEFORE $to_lsn;"
+innobackupex --use-memory=1G --defaults-file=/etc/mysql/my.cnf --apply-log --redo-only --user=root --password=XXXXXXXXXXXXXXX /var/bgb/0 > /var/bgb/log_p_0 2>&1
+sleep -m 60
+mysql --login-path=local -e "FLUSH CHANGED_PAGE_BITMAPS;"
+innobackupex --defaults-file=/etc/mysql/my.cnf --no-lock --no-timestamp --user=root --password=XXXXXXXXXXXXXXX --incremental /var/bgb/1 --incremental-basedir=/var/bgb/0 > /var/bgb/log_b_1 2>&1
+to_lsn=`grep to_lsn /var/bgb/1/xtrabackup_checkpoints | awk '{ print $3 }'`
+mysql --login-path=local -e "PURGE CHANGED_PAGE_BITMAPS BEFORE $to_lsn;"
+innobackupex --use-memory=1G --defaults-file=/etc/mysql/my.cnf --apply-log --redo-only --user=root --password=XXXXXXXXXXXXXXX /var/bgb/0 --incremental-dir=/var/bgb/1 > /var/bgb/log_p_1 2>&1
+sleep -m 60
+mysql --login-path=local -e "FLUSH CHANGED_PAGE_BITMAPS;"
+innobackupex --defaults-file=/etc/mysql/my.cnf --no-lock --no-timestamp --user=root --password=XXXXXXXXXXXXXXX --incremental /var/bgb/2 --incremental-basedir=/var/bgb/1 > /var/bgb/log_b_2 2>&1
+to_lsn=`grep to_lsn /var/bgb/2/xtrabackup_checkpoints | awk '{ print $3 }'`
+mysql --login-path=local -e "PURGE CHANGED_PAGE_BITMAPS BEFORE $to_lsn;"
+innobackupex --use-memory=1G --defaults-file=/etc/mysql/my.cnf --apply-log --redo-only --user=root --password=XXXXXXXXXXXXXXX /var/bgb/0 --incremental-dir=/var/bgb/2 > /var/bgb/log_p_2 2>&1
+#и так до 23-го бэкапа:
+sleep -m 60
+mysql --login-path=local -e "FLUSH CHANGED_PAGE_BITMAPS;"
+innobackupex --defaults-file=/etc/mysql/my.cnf --no-lock --no-timestamp --user=root --password=XXXXXXXXXXXXXXX --incremental /var/bgb/23 --incremental-basedir=/var/bgb/22 > /var/bgb/log_b_23 2>&1
+to_lsn=`grep to_lsn /var/bgb/23/xtrabackup_checkpoints | awk '{ print $3 }'`
+mysql --login-path=local -e "PURGE CHANGED_PAGE_BITMAPS BEFORE $to_lsn;"
+innobackupex --use-memory=1G --defaults-file=/etc/mysql/my.cnf --apply-log --user=root --password=XXXXXXXXXXXXXXX /var/bgb/0 --incremental-dir=/var/bgb/23 > /var/bgb/log_p_23 2>&1
+innobackupex --use-memory=1G --defaults-file=/etc/mysql/my.cnf --apply-log --user=root --password=XXXXXXXXXXXXXXX /var/bgb/0 > /var/bgb/log_fin 2>&1
+done
+----
+
+== Galera
+
+WARNING: Данное решение/метод/статья относится к версии 5.2 и для других версий может быть неактуальна!
+Вам нужно самостоятельно поправить решение под свои нужды или воспользоваться помощью на форуме.
+Будем признательны, если внизу страницы или отдельной статьёй вы разместите исправленное решение для другой версии или подсказки что надо исправить.
+
+1 - делаем galera кластер +
+2 - перекидываем базу ставим на сервере биллинга haproxy, добавляем в конфигурацию
+
+[source]
+----
+backend database
+mode tcp
+option tcpka
+balance source
+option httpchk GET /
+server db01 192.168.1.1:3306 weight 1 check port 8080 inter 1s rise 2 fall 1
+server db02 192.168.1.2:3306 weight 1 check port 8080 inter 1s rise 2 fall 1
+server db03 192.168.1.3:3306 weight 1 check port 8080 inter 1s rise 2 fall 1
+
+
+frontend db_write
+bind 127.0.0.1:3306
+default_backend database
+----
+
+где 192.168.1.1 192.168.1.2 192.168.1.3 это ноды кластера. +
+Далее на каждом сервере с mysql ставим
+
+[source]
+----
+python-iniparse
+mysql-connector-python
+----
+
+у меня стоит centos 7, далее пишу команды для него:
+
+[source]
+----
+yum -y install python-iniparse
+yum -y install ftp://mirror.switch.ch/pool/4/mirror/my ... noarch.rpm
+----
+
+далее скачиваем mysqlchk, это скрипт напитоне который проверяет статус ноды mysql. если подробнее - проверяет переменную wsrep_local_state
+
+[source]
+----
+git clone https://github.com/Dimonyga/mysql_galera_checker.git
+----
+
+добавляем в конфиг mysql
+
+[source]
+----
+[mysql]
+host = localhost
+user = mysql_user
+password = mysql_pass
+----
+
+вот собственно и всё, натравливаем на haproxy биллинг и радуемся жизни. +
+PS: J/Connector умеет это делать и сам, но заставить адекватно его работать у нас не получилось.
+
+PS: небольшой workaround - чтобы все процессы биллинга гарантированно попали на один сервер - рекомендуется на время запуска, в вэб интерфейсе haproxy ставить все ноды кроме одной в статус down. иначе если коннект уйдет на другой сервер - будет deadlock из за отставания репликации. потом естественно вернуть обратно.
+
+http://forum.bitel.ru/memberlist.php?mode=viewprofile&u=3231[Автор]

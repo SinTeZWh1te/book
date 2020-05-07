@@ -1,0 +1,60 @@
+= Ядро
+:toc:
+
+TIP: https://docs.bitel.ru/pages/viewpage.action?pageId=43385235[Документация] по расширению функциональности BGBilling
+
+== Смена тарифного плана по заданию пользователя
+
+=== Списание расхода при смене тарифного плана
+
+Скрипт списывает расход по смене тарифного плана пользователем.
+Сумма расхода получается как стоимость услуги в RSCM модуле.
+
+== Проверка параметра договора перед изменением
+
+Скрипт привязывается к событию ядра __Перед изменением параметра договора__.
+
+Выполняется проверка на длину параметра КПП, а так же проверка соответствия параметра с IP адресом на регулярное выражение.
+При несоответствии выдаёт ошибку.
+Параметр не меняется.
+
+[source,java]
+----
+package ru.test.kernel.scripts.events;
+
+import org.apache.log4j.Logger;
+import ru.bitel.bgbilling.kernel.event.events.ContractParamBeforeChangeEvent;
+import ru.bitel.bgbilling.kernel.script.server.dev.EventScriptBase;
+import ru.bitel.bgbilling.server.util.Setup;
+import ru.bitel.common.sql.ConnectionSet;
+
+/**
+ * @author sintezwh1te@gmail.com
+ */
+public class CheckContractParamsBeforeChange
+        extends EventScriptBase<ContractParamBeforeChangeEvent> {
+
+    private static final Logger logger = Logger.getLogger(CheckContractParamsBeforeChange.class);
+    private static final int KPP_PARAM_ID = 6; //ID параметра КПП из справочника параметров
+    private static final int IP_PARAM_ID = 44; //ID параметра IP-адреса
+
+    private static final String IP_REGEXP = "^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$";
+
+    @Override
+    public void onEvent(ContractParamBeforeChangeEvent event, Setup setup, ConnectionSet connectionSet)
+            throws Exception {
+        switch (event.getParamId()) {
+            case KPP_PARAM_ID:
+                if(event.getValue().toString().length() < 10){
+                    event.setError("Длина параметра меньше 10");
+                }
+                break;
+            case IP_PARAM_ID:
+                if(!event.getValue().toString().matches(IP_REGEXP)){
+                    event.setError("Неверный формат");
+                }
+                break;
+        }
+    }
+}
+----
